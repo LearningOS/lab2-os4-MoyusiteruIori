@@ -18,7 +18,7 @@ use core::convert::TryInto;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
-use crate::mm::VirtAddr;
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::timer::get_time_us;
 use crate::trap::TrapContext;
@@ -81,6 +81,7 @@ impl TaskManager {
     /// Generally, the first task in task list is an idle task (we call it zero process later).
     /// But in ch4, we load apps statically, so the first task is a real app.
     fn run_first_task(&self) -> ! {
+        println!("first task ready!");
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
@@ -89,6 +90,7 @@ impl TaskManager {
         next_task.start_running_time = get_time_us();
         drop(inner);
         let mut _unused = TaskContext::zero_init();
+        
         // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut _, next_task_cx_ptr);
@@ -163,7 +165,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         let current_task_memory_set = &mut inner.tasks[current].memory_set;
-        let task_pte = current_task_memory_set.translate(va.into()).unwrap();
+        let task_pte = current_task_memory_set.translate(va.floor()).unwrap();
         let task_ppn = task_pte.ppn();
         drop(inner);
         ((usize::from(task_ppn)) << 12) + (usize::from(va) & 0x00000fff as usize)
@@ -192,6 +194,29 @@ impl TaskManager {
         let current_task_start_time = inner.tasks[current].start_running_time;
         drop(inner);
         current_task_start_time
+    }
+
+    pub fn current_task_mmap(&self, start: VirtAddr, end: VirtAddr, perm: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let res = inner.tasks[current].memory_set.mmap(start, end, perm);
+        drop(inner);
+        res
+    }
+
+    pub fn current_task_munmap(&self, start: VirtAddr, end: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let res = inner.tasks[current].memory_set.munmap(start, end);
+        drop(inner);
+        res
+    }
+
+    pub fn get_current_task(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        drop(inner);
+        current
     }
 }
 
