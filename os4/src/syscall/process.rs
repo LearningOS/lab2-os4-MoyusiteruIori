@@ -1,7 +1,7 @@
 //! Process management syscalls
 
-use crate::config::MAX_SYSCALL_NUM;
-use crate::mm::VirtAddr;
+use crate::config::{MAX_SYSCALL_NUM, PAGE_SIZE};
+use crate::mm::{VirtAddr, get_allocatable_ppn, MapPermission};
 use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, TASK_MANAGER};
 use crate::timer::get_time_us;
 
@@ -53,11 +53,36 @@ pub fn sys_set_priority(_prio: isize) -> isize {
 
 // YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    -1
+    let start = VirtAddr::from(_start);
+    let end = VirtAddr::from(_start + _len);
+    let perm = MapPermission::from_bits((_port << 1) as u8 | 0x10).unwrap();
+    if !start.aligned() {
+        return -1;
+    }
+    if (_port & !0x7 != 0) || (_port & 0x7 == 0) {
+        return -1;
+    }
+    let mut frame_num = _len / PAGE_SIZE;
+    if _len % PAGE_SIZE != 0 {
+        frame_num += 1;
+    }
+    if frame_num > get_allocatable_ppn() {
+        println!("can't alloc!");
+        return -1;
+    }
+    TASK_MANAGER.current_task_mmap(start, end, perm)
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    -1
+    if !VirtAddr::from(_start).aligned() {
+        -1
+    }
+    else {
+        TASK_MANAGER.current_task_munmap(
+            VirtAddr::from(_start),
+            VirtAddr::from(_start + _len)
+        )
+    }
 }
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
@@ -65,7 +90,7 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     let ti = TASK_MANAGER.translate_in_current_task(VirtAddr::from(ti as usize)) as *mut TaskInfo;
     unsafe {
         *ti = TaskInfo {
-            status: TaskStatus::Ready,
+            status: TaskStatus::Running,
             syscall_times: TASK_MANAGER.get_current_task_syscall_times(),
             time: (get_time_us() - TASK_MANAGER.get_current_task_start_time()) / 1000
         }
